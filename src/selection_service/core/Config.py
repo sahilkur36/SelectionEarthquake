@@ -25,7 +25,7 @@ STANDARD_COLUMNS = ["PROVIDER","RSN","EVENT", "YEAR", "MAGNITUDE", "MAGNITUDE_TY
                     "STATION","SSN","STATION_ID","STATION_LAT","STATION_LON","VS30(m/s)",
                     "STRIKE1","DIP1","RAKE1","MECHANISM",
                     "EPICENTER_DEPTH(km)","HYPOCENTER_DEPTH(km)","RJB(km)","RRUP(km)","HYPO_LAT","HYPO_LON","HYPO_DEPTH(km)",
-                    "T90_avg(sec)","ARIAS_INTENSITY(m/sec)","LOWFREQ(Hz)","FILE_NAME_H1","FILE_NAME_H2","FILE_NAME_V","PGA(cm2/sec)","PGV(cm/sec)","PGD(cm)"]
+                    "T90_avg(sec)","ARIAS_INTENSITY(m/sec)","LOWFREQ(Hz)","FILE_NAME_H1","FILE_NAME_H2","FILE_NAME_V","PGA(cm2/sec)","PGV(cm/sec)","PGD(cm)",]
 
 MECHANISM_MAP = {
     0: 'StrikeSlip',

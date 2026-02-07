@@ -132,3 +132,8 @@ class PeerWest2Provider(IDataProvider):
 
     def get_name(self) -> str:
         return str(self.name)
+    
+    @result_decorator
+    def download_single_waveforms(self, filename: str, **kwargs) -> bool|ProviderError:
+        """PEER veri setinde dalga formu dosyaları mevcut değil, bu fonksiyon sadece şablon amaçlı bırakılmıştır."""
+        raise ProviderError(self.name, Exception("PEER veri setinde dalga formu dosyaları mevcut değil."))

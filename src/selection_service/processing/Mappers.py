@@ -62,6 +62,7 @@ class AFADColumnMapper(BaseColumnMapper):
             "rhyp"                      : "RHYP(km)"      ,   
             "relatedEarthquakeLatitude" : "HYPO_LAT"      ,   
             "relatedEarthquakeLongitude": "HYPO_LON"      ,
+            "stationCode"               : "SSN"           , #Station Sequence Number olarak kullanacağız, bu kod üzerinden ilgili depreme ait kayıtlar listeleniyor.  
             "stationId"                 : "STATION_ID"    ,  
             "relatedStationLatitude"    : "STATION_LAT"   ,   
             "relatedStationLongitude"   : "STATION_LON"   ,    
@@ -366,7 +367,7 @@ class ColumnMapperFactory:
     _mappers = {
         ProviderName.AFAD: AFADColumnMapper,
         ProviderName.PEER: PEERColumnMapper,
-        ProviderName.FDSN: BaseColumnMapper,
+        # ProviderName.FDSN: BaseColumnMapper,
     }
     
     @classmethod

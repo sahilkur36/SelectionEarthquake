@@ -22,3 +22,6 @@ class IDataProvider(Protocol):
     def get_name(self) -> str:
         """Sağlayıcı adı"""
         ...
+    def download_single_waveforms(self, filename: str, **kwargs) -> Result[bool, ProviderError]:
+        """Tek bir dalga formu dosyasını indir"""
+        ...

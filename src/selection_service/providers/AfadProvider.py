@@ -52,11 +52,12 @@ class AFADDataProvider(IDataProvider):
                     timeout=self.timeout
                 ) as response:
                     if response.status == 200:
-                        data = await response.json()
-                        self.response_df = pd.DataFrame(data)
-                        self.mapped_df = self.column_mapper.map_columns(df=self.response_df)
-                        self.mapped_df['PROVIDER'] = str(self.name)
+                        data = await response.json() #AFAD API'si JSON formatında veri döndürüyor
+                        self.response_df = pd.DataFrame(data) #JSON verisini DataFrame'e dönüştür
+                        self.mapped_df = self.column_mapper.map_columns(df=self.response_df) #Verileri standart kolonlara eşleştir
+                        self.mapped_df['PROVIDER'] = str(self.name) #Sağlayıcı adını ekle
                         print(f"AFAD'dan {len(self.mapped_df)} kayıt alındı.")
+                        self.mapped_df['ENDPOINTSOURCE'] = "https://tadas.afad.gov.tr/waveform-detail/" + self.mapped_df['RSN'].astype(str) #Kayıtlara AFAD detay sayfası linki ekle
                         return self.mapped_df
                     else:
                         error_text = await response.text()
@@ -146,6 +147,99 @@ class AFADDataProvider(IDataProvider):
         
         return pd.DataFrame(all_details) if all_details else pd.DataFrame()
 
+    def _waveform_folder_route(self, event_id: int) -> str:
+        """AFAD dalga formu dosyalarının kaydedileceği klasör yapısını oluşturur"""
+        event_dir = os.path.join(self.base_download_dir, f"event_{event_id}")
+        os.makedirs(event_dir, exist_ok=True)
+        return event_dir
+    
+    def save_waveform_zipfile(self, zip_content: bytes, event_id: int, station_id: str) -> str:
+        """AFAD'dan indirilen zip dosyasını kaydeder geriye dosya yolunu döndürür
+        Args:
+            zip_content (bytes): AFAD API'sinden gelen zip dosyasının içeriği
+            event_id (int): İlgili deprem olayının ID'si (klasör yapısı için)
+            station_id (str): İstasyon kodu (dosya adlandırması için)
+        """
+        folder_dir = self._waveform_folder_route(event_id=event_id)
+        zip_path = os.path.join(folder_dir, f"waveforms_{event_id}_{station_id}.zip")
+        with open(zip_path, 'wb') as f:
+            f.write(zip_content)
+        return zip_path
+
+    def extract_and_organize_zip(self, zip_path: str, export_type: str) -> List[str]:
+        """Zip dosyasını açar ve içindeki dosyaları organize eder"""
+        extracted_files = []
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(os.path.dirname(zip_path))
+                for file_info in zip_ref.infolist():
+                    if file_info.filename.endswith('.zip') and export_type == 'asc2':
+                        with zipfile.ZipFile(zip_ref.open(file_info), 'r') as inner_zip:
+                            inner_zip.extractall(os.path.dirname(zip_path))
+                            extracted_files.extend([os.path.join(os.path.dirname(zip_path), f) for f in inner_zip.namelist()])
+                    else:
+                        extracted_files.append(os.path.join(os.path.dirname(zip_path), file_info.filename))
+        except Exception as e:
+            raise ProviderError(self.name, e, f"Zip extraction failed: {e}")
+        
+        return extracted_files
+
+    @result_decorator
+    def download_single_waveforms(self, filename: str, **kwargs) -> bool|ProviderError:
+        """
+        Downloads AFAD waveform files in batches, saves them as zip files, and extracts the contents.
+        Args:
+            filename (str): The filename to download. "self.mapped_df içindeki FILE_NAME_H1, FILE_NAME_H2, FILE_NAME_V kolonlarında bulunan dosya adları üzerinden indirme yapılacak."
+            file_type (str, optional): Type of file to download. Defaults to 'unprocessed'.
+            file_status (str, optional): Status of the file. Defaults to 'RawAcc'. Options --> "RawAcc", "Acc", "Vel", "Disp", "ResSpecAcc", "ResSpecVel", "ResSpecDisp", "FFT", "Husid"
+            export_type (str, optional): Export format for the files. Defaults to 'asc2'. Options --> asc2, mseed, asd
+            user_name (str, optional): Name of the user requesting the download. Defaults to 'GuestUser'.
+            event_id (str or int, optional): Event ID for organizing downloaded files. If not provided, a timestamp is used.
+        Returns:
+            Dict: A dictionary containing the result of the download operation, including success status and message.
+        Raises:
+            ProviderError: If any error occurs during the download or extraction process.
+        """
+        file_type   = kwargs.get('file_type', 'unprocessed')
+        file_status = kwargs.get('file_status', 'RawAcc')
+        export_type = kwargs.get('export_type', 'asc2')
+        user_name   = kwargs.get('user_name', 'GuestUser')
+        event_id    = kwargs.get('event_id', int(time.time())) # Event ID yoksa timestamp kullan
+        station_id  = kwargs.get('station_code',filename.split('_')[-1] if '_' in filename else "unknown_station")
+
+        url = "https://ivmeprocessguest.afad.gov.tr/ExportData"
+
+        headers = {
+            'Accept': 'application/json, text/plain, */*',
+            'Content-Type': 'application/json',
+            'Origin': 'https://tadas.afad.gov.tr',
+            'Referer': 'https://tadas.afad.gov.tr/',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Username': 'GuestUser',
+            'IsGuest': 'true'
+        }
+        payload = {
+                "filename": [filename],
+                "file_type": [file_type],
+                "file_status": file_status,
+                "export_type": export_type,
+                "user_name": user_name,
+                "call": "afad"
+            }
+
+        try:
+            # POST isteği gönder
+            response = requests.post(url, headers=headers, json=payload, timeout=50)
+            response.raise_for_status()
+            zip_path = self.save_waveform_zipfile(zip_content=response.content, event_id=event_id, station_id=station_id)
+            extr_files = self.extract_and_organize_zip(zip_path=zip_path, export_type=export_type)
+            return True
+        
+                
+        except requests.RequestException as e:
+            raise ProviderError(f"Waveform download failed for file {filename}: {e}")
+        
+    
     @result_decorator
     def download_afad_waveforms_batch(self,
                                       filenames: List[str], **kwargs) -> Dict:

@@ -20,7 +20,7 @@ from ..processing.ResultHandle import (Result,
                                        result_decorator)
 import logging
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -59,7 +59,7 @@ class EarthquakePipeline:
                             target_params: TargetParameters) -> Result[PipelineResult, PipelineError]:
         """Asenkron pipeline çalıştır"""
        
-        logger.info(f"Pipeline (async) running: strategy={strategy.get_name()}, providers={len(providers)}")
+        # logger.info(f"Pipeline (async) running: strategy={strategy.get_name()}, providers={len(providers)}")
         context = PipelineContext(
             providers=providers,
             strategy=strategy,
@@ -148,7 +148,7 @@ class EarthquakePipeline:
                      target_params: TargetParameters) -> Result[PipelineResult, PipelineError]:
         """Senkron pipeline çalıştır"""
     
-        logger.info(f"Pipeline (sync) running: strategy={strategy.get_name()}, providers={len(providers)}")
+        # logger.info(f"Pipeline (sync) running: strategy={strategy.get_name()}, providers={len(providers)}")
     
         context = PipelineContext(
             providers=providers,
@@ -370,4 +370,56 @@ class EarthquakeAPI:
         if name not in self.strategies:
             return Result.fail(ValueError(f"Strategy {name} not found"))
         return Result.ok(self.strategies[name])
+
+    def _get_provider_by_name(self, name: str) -> Optional[IDataProvider]:
+        """Get provider by name"""
+        for provider in self.providers:
+            if provider.get_name() == name:
+                return provider
+        return None
+
+    def download_single_waveforms(self, provider_name: str, filename: str, **kwargs) -> Result[bool, ProviderError]:
+        """Download single waveforms from a specific provider
+        Args:
+            provider_name (str): The name of the provider to download from.
+            filename (str): The name of the file to be downloaded.
+            **kwargs: Additional keyword arguments for the download function.
+                        event_id (int): İlgili deprem olayının ID'si (klasör yapısı için)
+                        station_id (str): İstasyon kodu (dosya adlandırması için)
+        Returns:
+            Result[bool, ProviderError]: A Result object containing either True on successful download,
+        """
+        provider = self._get_provider_by_name(provider_name)
+        if not provider:
+            return Result.fail(ProviderError(provider_name, "Provider not found"))
+        try:
+            return provider.download_single_waveforms(filename=filename, **kwargs)
+        except Exception as e:
+            return Result.fail(ProviderError(provider_name, e))
+        
+    
+    def download_waveforms(self, result_df : pd.DataFrame) -> Result[bool, ProviderError]:
+        """Download waveforms for a specific event and station"""
+        for provider in self.providers:
+            try:
+                # if provider.get_name() == ProviderName.PEER.value:
+                #     print(f"PEER veri setinde dalga formu dosyaları mevcut değil, bu fonksiyon sadece şablon amaçlı bırakılmıştır.")
+                #     continue
+
+                for _, row in result_df.iterrows():
+                    source = row['PROVIDER']
+                    if source != provider.get_name():
+                        continue
+                    filename = row['FILE_NAME_H1']
+                    event_id = row['EVENT']
+                    station_code = row['SSN']
+                    res = provider.download_single_waveforms(filename=filename, event_id=event_id, station_code=station_code)
+                    if not res.success:
+                        return res
+                else:
+                    Result.fail(ProviderError(provider.get_name()))
+            except Exception as e:
+                Result.fail(ProviderError(provider.get_name(), e, "Failed to download waveforms"))
+        
+        return Result.ok(True)
 
