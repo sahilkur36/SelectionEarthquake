@@ -48,21 +48,21 @@ async def example_usage():
         # Tüm kayıtlar için dalga formu indirme
         # api.download_waveforms(result.value.selected_df)
         # Tekil bir dalga formu dosyasını indirme örneği
-        # if not result.value.selected_df.empty:
-        #     first_file = result.value.selected_df.iloc[5]['FILE_NAME_H1']
-        #     download_result = api.download_single_waveforms(provider_name=result.value.selected_df.iloc[5]['PROVIDER'], filename=first_file)
-        #     if download_result.success:
-        #         print(f"Downloaded waveform for {first_file}")
-        #     else:
-        #         print(f"Failed to download waveform for {first_file}: {download_result.error}")
+        if not result.value.selected_df.empty:
+            first_file = result.value.selected_df.iloc[5]['FILE_NAME_H1']
+            download_result = api.download_single_waveforms(provider_name=result.value.selected_df.iloc[5]['PROVIDER'], filename=first_file)
+            if download_result.success:
+                print(f"Downloaded waveform for {first_file}")
+            else:
+                print(f"Failed to download waveform for {first_file}: {download_result.error}")
         
-        print(f"Target Parameters = {result.value.report['target_params'].__repr__()}")
-        print(f"Search Criteria = {result.value.report['search_criteria'].__repr__()}")
-        print(f"Strategy = {result.value.report['strategy']} ")
-        print(f"Total find event = {result.value.report['total_considered']} ")
-        print(f"{result.value.report['selected_count']} records selected")
-        print(f"Statistic = {result.value.report['statistics']} ")
-        print(result.value.selected_df[['PROVIDER','RSN','EVENT','YEAR','MAGNITUDE','SSN','STATION','VS30(m/s)','RRUP(km)','MECHANISM','PGA(cm2/sec)','PGV(cm/sec)','SCORE','ENDPOINTSOURCE','FILE_NAME_H1','FILE_NAME_H2','FILE_NAME_V']])
+        # print(f"Target Parameters = {result.value.report['target_params'].__repr__()}")
+        # print(f"Search Criteria = {result.value.report['search_criteria'].__repr__()}")
+        # print(f"Strategy = {result.value.report['strategy']} ")
+        # print(f"Total find event = {result.value.report['total_considered']} ")
+        # print(f"{result.value.report['selected_count']} records selected")
+        # print(f"Statistic = {result.value.report['statistics']} ")
+        # print(result.value.selected_df[['PROVIDER','RSN','EVENT','YEAR','MAGNITUDE','SSN','STATION','VS30(m/s)','RRUP(km)','MECHANISM','PGA(cm2/sec)','PGV(cm/sec)','SCORE','ENDPOINTSOURCE','FILE_NAME_H1','FILE_NAME_H2','FILE_NAME_V']])
         return result.value
     else:
         print(f"[ERROR]: {result.error}")

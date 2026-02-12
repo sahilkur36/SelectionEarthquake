@@ -1,3 +1,4 @@
+import io
 import os
 import time
 from typing import Any, Dict, List, Type
@@ -169,19 +170,64 @@ class AFADDataProvider(IDataProvider):
     def extract_and_organize_zip(self, zip_path: str, export_type: str) -> List[str]:
         """Zip dosyasını açar ve içindeki dosyaları organize eder"""
         extracted_files = []
+        MIN_ZIP_SIZE = 1024  # bytes, treat much smaller files as suspicious
+
+        # Quick size sanity check
+        try:
+            size = os.path.getsize(zip_path)
+            if size < MIN_ZIP_SIZE:
+                raise ProviderError(self.name, None, f"[WARNING] İndirilen zip dosyası çok küçük ({size} bytes): {zip_path}")
+        except OSError:
+            # If we can't stat the file, let the normal zip handling surface the error
+            pass
+
         try:
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(os.path.dirname(zip_path))
+                # Test for first bad file inside the zip (returns name of bad file or None)
+                bad_file = zip_ref.testzip()
+                if bad_file is not None:
+                    raise ProviderError(self.name, None, f"[ERROR] Hasarlı zip içeriği: {bad_file} in {zip_path}")
+
+                # Extract all top-level files into the same folder as the zip
+                target_dir = os.path.dirname(zip_path)
+                zip_ref.extractall(target_dir)
+
                 for file_info in zip_ref.infolist():
-                    if file_info.filename.endswith('.zip') and export_type == 'asc2':
-                        with zipfile.ZipFile(zip_ref.open(file_info), 'r') as inner_zip:
-                            inner_zip.extractall(os.path.dirname(zip_path))
-                            extracted_files.extend([os.path.join(os.path.dirname(zip_path), f) for f in inner_zip.namelist()])
+                    member_name = file_info.filename
+                    abs_path = os.path.join(target_dir, member_name)
+
+                    # If the member is itself a zip and ascii export requested, extract nested zip
+                    if member_name.endswith('.zip') and export_type in ("asc", "asc2"):
+                        try:
+                            # Read inner zip bytes and open with BytesIO for safety
+                            inner_bytes = zip_ref.read(member_name)
+                            with zipfile.ZipFile(io.BytesIO(inner_bytes), 'r') as inner_zip:
+                                inner_zip.extractall(target_dir)
+                                extracted_files.extend([os.path.join(target_dir, f) for f in inner_zip.namelist()])
+                        except zipfile.BadZipFile:
+                            raise ProviderError(self.name, None, f"[ERROR] İç zip hasarlı: {member_name} inside {zip_path}")
+                        except Exception as e:
+                            # don't stop processing other files for a single nested failure
+                            print(f"[ERROR] İç zip çıkarma hatası: {member_name} -> {e}")
+                            continue
                     else:
-                        extracted_files.append(os.path.join(os.path.dirname(zip_path), file_info.filename))
+                        extracted_files.append(abs_path)
+
+        except zipfile.BadZipFile:
+            raise ProviderError(self.name, None, f"[ERROR] Hasarlı zip dosyası: {zip_path}")
+        except ProviderError:
+            # re-raise ProviderError unchanged
+            raise
         except Exception as e:
             raise ProviderError(self.name, e, f"Zip extraction failed: {e}")
-        
+
+        # Optionally remove the original zip if extraction succeeded
+        try:
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+        except Exception:
+            pass
+
         return extracted_files
 
     @result_decorator
@@ -237,7 +283,7 @@ class AFADDataProvider(IDataProvider):
         
                 
         except requests.RequestException as e:
-            raise ProviderError(f"Waveform download failed for file {filename}: {e}")
+            raise ProviderError(provider_name=self.name, original_error=e, message=f"Waveform download failed: {e}")
         
     
     @result_decorator

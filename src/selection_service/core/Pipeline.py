@@ -397,7 +397,6 @@ class EarthquakeAPI:
         except Exception as e:
             return Result.fail(ProviderError(provider_name, e))
         
-    
     def download_waveforms(self, result_df : pd.DataFrame) -> Result[bool, ProviderError]:
         """Download waveforms for a specific event and station"""
         for provider in self.providers:
