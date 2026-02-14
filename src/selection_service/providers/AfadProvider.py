@@ -41,7 +41,12 @@ class AFADDataProvider(IDataProvider):
 
     @async_result_decorator
     async def fetch_data_async(self, criteria: Dict[str, Any]) -> pd.DataFrame:
-        """AFAD verilerini getir"""
+        """ AFAD verilerini getir. AFAD API'si JSON formatında veri döndürdüğü için, burada JSON verisi DataFrame'e dönüştürülür ve kolon eşleştirmesi yapılır.
+            AFAD API'si genellikle büyük veri döndürebileceğinden, bu işlemi asenkron olarak yaparak performansı artırmayı hedefler. Ayrıca, her kayda AFAD detay sayfası linki eklenir.
+            Kriterler, map_criteria fonksiyonu ile AFAD'ın beklediği formata dönüştürülmelidir.
+            Örnek kriterler: {"start_date": "2020-01-01", "end_date": "2025-12-31", "min_magnitude": 6.0, "max_magnitude": 8.0}
+            
+        """
         try:
             payload = criteria
             print(f"AFAD arama kriterleri: {payload}")

@@ -1,29 +1,90 @@
 import pandas as pd
+# Config.py
 
-# TODO Ranges and weights should be configurable from outside (e.g., a config file) maybe enums or something else
-# Ranges are defined as (min, max) tuples for each quality level
-SCORE_RANGES_AND_WEIGHTS = {
-                            'ranges': {
-                                'magnitude' : {'very_good': (0.95, 1.05), 'good': (0.9, 1.1), 'acceptable': (0.85, 1.15)},
-                                'distance'  : {'very_good': (0.85, 1.15), 'good': (0.8, 1.2), 'acceptable': (0.75, 1.25)},
-                                'vs30'      : {'very_good': (0.9, 1.1)  , 'good': (0.8, 1.2), 'acceptable': (0.7, 1.3)},
-                                'pga'       : {'very_good': (0.9, 1.1)  , 'good': (0.8, 1.2), 'acceptable': (0.7, 1.3)},
-                                'pgv'       : {'very_good': (0.9, 1.1)  , 'good': (0.8, 1.2), 'acceptable': (0.7, 1.3)},
-                                't90'       : {'very_good': (0.9, 1.1)  , 'good': (0.8, 1.2), 'acceptable': (0.7, 1.3)},                    
-                            },
-                            'weights': {
-                                'magnitude_match': 5.0, 
-                                'distance_match': 4.5, 
-                                'vs30_match': 4.0,
-                                'pga_match': 3.5, 
-                                'pgv_match': 3.0, 
-                                't90_match': 3.0,
-                                'mechanism_match': 3.0
-                            }
-                        }
+# Puanlama Parametreleri Kayıt Defteri
+# key: Kod içinde kullanacağımız kısa ad
+# column: DataFrame içindeki gerçek kolon adı
+# weight: Varsayılan ağırlık
+# sigma_strictness: Gaussian eğrisinin darlığı (Yüksek değer = Daha katı puanlama)
+# type: 'numeric' veya 'categorical'
+
+SCORING_MAP = {
+    'magnitude': {
+        'column': 'MAGNITUDE',
+        'weight': 5.0,
+        'sigma_strictness': 4.0,
+        'type': 'numeric'
+    },
+    'rjb': {
+        'column': 'RJB(km)',
+        'weight': 4.5,
+        'sigma_strictness': 3.0,
+        'type': 'numeric'
+    },
+    'rrup': {
+        'column': 'RRUP(km)',
+        'weight': 4.5,
+        'sigma_strictness': 3.0,
+        'type': 'numeric'
+    },
+    'repi': {
+        'column': 'REPI(km)',
+        'weight': 4.0,
+        'sigma_strictness': 3.0,
+        'type': 'numeric'
+    },
+    'vs30': {
+        'column': 'VS30(m/s)',
+        'weight': 4.0,
+        'sigma_strictness': 5.0,
+        'type': 'numeric'
+    },
+    'pga': {
+        'column': 'PGA(cm2/sec)',
+        'weight': 3.5,
+        'sigma_strictness': 4.0,
+        'type': 'numeric'
+    },
+    'pgv': {
+        'column': 'PGV(cm/sec)',
+        'weight': 3.0,
+        'sigma_strictness': 4.0,
+        'type': 'numeric'
+    },
+    'pgd': {
+        'column': 'PGD(cm)',
+        'weight': 2.5,
+        'sigma_strictness': 3.0,
+        'type': 'numeric'
+    },
+    't90': {
+        'column': 'T90_avg(sec)',
+        'weight': 3.0,
+        'sigma_strictness': 3.0,
+        'type': 'numeric'
+    },
+    'arias': {
+        'column': 'ARIAS_INTENSITY(m/sec)',
+        'weight': 2.0,
+        'sigma_strictness': 3.0,
+        'type': 'numeric'
+    },
+    'depth': {
+        'column': 'HYPO_DEPTH(km)',
+        'weight': 2.0,
+        'sigma_strictness': 2.0,
+        'type': 'numeric'
+    },
+    'mechanism': {
+        'column': 'MECHANISM',
+        'weight': 3.0,
+        'type': 'categorical' # Kategorik eşleşme
+    }
+}
 STANDARD_COLUMNS = ["PROVIDER","RSN","EVENT", "YEAR", "MAGNITUDE", "MAGNITUDE_TYPE", 
                     "STATION","SSN","STATION_ID","STATION_LAT","STATION_LON","VS30(m/s)",
                     "STRIKE1","DIP1","RAKE1","MECHANISM",
+                    "ENDPOINTSOURCE",
                     "EPICENTER_DEPTH(km)","HYPOCENTER_DEPTH(km)","RJB(km)","RRUP(km)","HYPO_LAT","HYPO_LON","HYPO_DEPTH(km)",
                     "T90_avg(sec)","ARIAS_INTENSITY(m/sec)","LOWFREQ(Hz)","FILE_NAME_H1","FILE_NAME_H2","FILE_NAME_V","PGA(cm2/sec)","PGV(cm/sec)","PGD(cm)",]
 

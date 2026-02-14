@@ -1,14 +1,36 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
+import math
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 from obspy import UTCDateTime
 import pandas as pd
+from pydantic import BaseModel, Field, model_validator
 from ..enums.Enums import DesignCode
-from ..core.Config import MECHANISM_MAP,REVERSE_MECHANISM_MAP, SCORE_RANGES_AND_WEIGHTS, get_mechanism_numeric
+from ..core.Config import MECHANISM_MAP,REVERSE_MECHANISM_MAP, SCORING_MAP, get_mechanism_numeric
 
+class ScoringWeights(BaseModel):
+    """
+    Kullanıcı arayüzünden gelen ağırlıklar. 
+    Eğer kullanıcı belirtmezse Config.py'deki varsayılanları kullanır.
+    """
+    # Config'deki her anahtar için dinamik alan oluşturuyoruz
+    # (Burayı manuel de yazabilirsiniz ama Pydantic ile dinamik de yönetilebilir)
+    magnitude: float = SCORING_MAP['magnitude']['weight']
+    rjb: float = SCORING_MAP['rjb']['weight']
+    rrup: float = SCORING_MAP['rrup']['weight']
+    repi: float = SCORING_MAP['repi']['weight']
+    vs30: float = SCORING_MAP['vs30']['weight']
+    pga: float = SCORING_MAP['pga']['weight']
+    pgv: float = SCORING_MAP['pgv']['weight']
+    pgd: float = SCORING_MAP['pgd']['weight']
+    t90: float = SCORING_MAP['t90']['weight']
+    arias: float = SCORING_MAP['arias']['weight']
+    depth: float = SCORING_MAP['depth']['weight']
+    mechanism: float = SCORING_MAP['mechanism']['weight']
 
-
+    def get_weight(self, key: str) -> float:
+        return getattr(self, key, 0.0)
 @dataclass
 class SelectionConfig:
     """Seçim konfigürasyonu"""
@@ -17,10 +39,9 @@ class SelectionConfig:
     max_per_station: int = 3
     max_per_event: int = 3
     min_score: float = 50.0
-    required_components: List[str] = None
+    required_components: List[str] = Field(default_factory=list)
 
-@dataclass  
-class SearchCriteria:
+class SearchCriteria(BaseModel):
     """Arama kriterleri - Tüm sağlayıcılar için ortak kriterler"""
     start_date: str                          # from_date: Başlangıç tarihi (ISO format: "2023-02-06T01:16:00.000Z")  
     end_date: str                            # to_date: Bitiş tarihi (ISO format: "2023-02-06T01:18:41.000Z")
@@ -49,24 +70,77 @@ class SearchCriteria:
     max_pgd: Optional[float] = None          # Maksimum PGD değeri
     fault_type: Optional[str] = None         # Fay tipi
     event_name: Optional[str] = None         # Event ismi
-    min_Repi: Optional[float] = None
-    max_Repi: Optional[float] = None
-    min_Rhyp: Optional[float] = None
-    max_Rhyp: Optional[float] = None
-    min_Rjb: Optional[float] = None
-    max_Rjb: Optional[float] = None
-    min_Rrup: Optional[float] = None
-    max_Rrup: Optional[float] = None
-    min_vs30: Optional[float] = None
-    max_vs30: Optional[float] = None
-    mechanisms: Optional[List[str]] = None
-    bbox: Optional[Tuple[float, float, float, float]] = None
-    region: Optional[str] = None
+    min_Repi: Optional[float] = None         # Minimum Repi değeri Repicentral distance (Deprem merkez üssüne olan uzaklık) 
+    max_Repi: Optional[float] = None         # Maksimum Repi değeri Repicentral distance (Deprem merkez üssüne olan uzaklık)
+    min_Rhyp: Optional[float] = None         # Minimum Rhyp değeri Hypocentral distance (Deprem hiposantrına olan uzaklık)
+    max_Rhyp: Optional[float] = None         # Maksimum Rhyp değeri Hypocentral distance (Deprem hiposantrına olan uzaklık)
+    min_Rjb: Optional[float] = None          # Minimum Rjb değeri Joyner-Boore distance (Yüzeye izdüşüm uzaklığı)
+    max_Rjb: Optional[float] = None          # Maksimum Rjb değeri Joyner-Boore distance (Yüzeye izdüşüm uzaklığı)
+    min_Rrup: Optional[float] = None         # Minimum Rrup değeri Rupture distance (Kırılma uzaklığı)
+    max_Rrup: Optional[float] = None         # Maksimum Rrup değeri Rupture distance (Kırılma uzaklığı)
+    min_vs30: Optional[float] = None         # Minimum Vs30 değeri
+    max_vs30: Optional[float] = None         # Maksimum Vs30 değeri
+    mechanisms: Optional[List[str]] = Field(default_factory=list) # Fay mekanizması (ör: StrikeSlip, Normal, Reverse, Oblique)
+    region: Optional[str] = None       # Bölge adı (örn: "Marmara", "Ege", "Doğu Anadolu" gibi AFAD'ın bölge tanımlarından biri)
+    bbox: Optional[Tuple[float, float, float, float]] = Field(default_factory=tuple) # BBox formatı: (min_lat, max_lat, min_lon, max_lon)
 
-    def validate(self) -> None:
-        """Kriterleri validate et"""
-        CriteriaValidator.validate_search_criteria(self)
+    # Kullanıcı boş bırakırsa, sistem (min+max)/2 formülünü kullanır.
+    # Kullanıcı bunları girerse puanlamaya dahil olur, girmezse ELİMİNE olur.
+    target_magnitude: Optional[float] = None
+    target_rjb: Optional[float] = None
+    target_rrup: Optional[float] = None
+    target_repi: Optional[float] = None
+    target_vs30: Optional[float] = None
+    target_pga: Optional[float] = None
+    target_pgv: Optional[float] = None
+    target_pgd: Optional[float] = None
+    target_t90: Optional[float] = None
+    target_arias: Optional[float] = None
+    target_depth: Optional[float] = None
+
+    # -- Dinamik Ağırlıklar --
+    weights: ScoringWeights = Field(default_factory=ScoringWeights)
+
+    # --- Yardımcı Metodlar ---
+    def get_effective_target(self, key: str) -> Optional[float]:
+        """
+        Belirli bir parametre için hedef değeri döndürür.
+        1. target_X var mı? Varsa döndür.
+        2. Yoksa min_X ve max_X ortalamasını al.
+        3. O da yoksa None döndür (Puanlamadan düş)
+        """
+        # Explicit target kontrolü
+        explicit = getattr(self, f"target_{key}", None)
+        if explicit is not None:
+            return explicit
         
+        # Aralık ortalaması kontrolü
+        min_val = getattr(self, f"min_{key}", None)
+        max_val = getattr(self, f"max_{key}", None)
+        
+        # Sadece aralık verildiyse ve target yoksa, aralık ortasını hedef al
+        if min_val is not None and max_val is not None:
+            return (min_val + max_val) / 2.0
+            
+        return min_val if min_val is not None else max_val
+
+    def get_sigma(self, key: str) -> float:
+        """Config dosyasından o parametre için belirlenen katılık (strictness) değerini kullanarak sigma hesaplar."""
+        config = SCORING_MAP.get(key, {})
+        strictness = config.get('sigma_strictness', 4.0)
+        
+        # Eğer kullanıcının bir aralığı varsa, aralığı baz al
+        min_val = getattr(self, f"min_{key}", None)
+        max_val = getattr(self, f"max_{key}", None)
+        
+        if min_val is not None and max_val is not None:
+            diff = max_val - min_val
+            return diff / strictness if diff > 0 else 1.0
+            
+        # Aralık yoksa, hedef değerin %10'u kadar bir sigma uydur (Fallback)
+        target = self.get_effective_target(key)
+        return (target * 0.1) if target else 1.0
+    
     def to_afad_params(self) -> Dict[str, Any]:
         """AFAD API'sine özel parametre dönüşümü"""
         params = {
@@ -99,8 +173,6 @@ class SearchCriteria:
             "toPGV"         : self.max_pgv,
             "fromPgd"       : self.min_pgd,
             "toPgd"         : self.max_pgd,
-            "fromPgv"       : self.min_pgv,
-            "toPgv"         : self.max_pgv,
             
             
             "fromT90"       : None,            
@@ -199,131 +271,123 @@ class SearchCriteria:
             params["minlatitude"], params["maxlatitude"], params["minlongitude"], params["maxlongitude"] = self.bbox
             
         return params
-    
-@dataclass
-class TargetParameters:
-    """Hedef parametreler"""
-    magnitude: float
-    distance: float  
-    vs30: float
-    mechanism: Optional[str] = None
-    pga: Optional[str] = None
-    pgv: Optional[str] = None
-    t90: Optional[str] = None
-    
 
-    def validate(self) -> None:
-        """Parametreleri validate et"""
-        CriteriaValidator.validate_target_parameters(self)
+    @model_validator(mode='after')
+    def check_magnitudes(self):
+        if self.min_magnitude > self.max_magnitude:
+            raise ValueError("Min büyüklük Max büyüklükten büyük olamaz.")
+        if self.min_magnitude < 0 or self.max_magnitude > 10:
+            raise ValueError("Büyüklük değerleri 0-10 aralığında olmalıdır")
+        return self
 
-class ValidationError(Exception):
-    """Özel validasyon hatası sınıfı"""
-    pass
-
-class CriteriaValidator:
-    """Arama kriterleri validasyon sınıfı"""
-    
-    @staticmethod
-    def validate_search_criteria(criteria: SearchCriteria) -> None:
-        """SearchCriteria nesnesini validate et"""
-        errors = []
-        
-        # Tarih validasyonu
+    @model_validator(mode='after')
+    def check_dates(self):
         try:
-            start_date = datetime.fromisoformat(criteria.start_date.replace('Z', '+00:00'))
-            end_date = datetime.fromisoformat(criteria.end_date.replace('Z', '+00:00'))
-            if start_date > end_date:
-                errors.append("Başlangıç tarihi bitiş tarihinden sonra olamaz")
-        except ValueError:
-            errors.append("Geçersiz tarih formatı. ISO format (YYYY-MM-DD) kullanın")
-        
-        # Büyüklük validasyonu
-        if criteria.min_magnitude is not None and criteria.max_magnitude is not None:
-            if criteria.min_magnitude > criteria.max_magnitude:
-                errors.append("Minimum büyüklük maksimum büyüklükten büyük olamaz")
-            if criteria.min_magnitude < 0 or criteria.max_magnitude > 10:
-                errors.append("Büyüklük değerleri 0-10 aralığında olmalıdır")
-        
-        # Mesafe validasyonu
+            start = datetime.fromisoformat(self.start_date.replace('Z', '+00:00'))
+            end = datetime.fromisoformat(self.end_date.replace('Z', '+00:00'))
+            if start > end:
+                raise ValueError("Başlangıç tarihi bitiş tarihinden sonra olamaz.")
+        except ValueError as e:
+            raise ValueError(f"Geçersiz tarih formatı: {e}")
+        return self
+
+    @model_validator(mode='after')
+    def check_bbox(self):
+        if self.bbox:
+            min_lat, max_lat, min_lon, max_lon = self.bbox
+            if not (-90 <= min_lat <= 90) or not (-90 <= max_lat <= 90):
+                raise ValueError("Enlem değerleri -90 ile 90 arasında olmalıdır.")
+            if not (-180 <= min_lon <= 180) or not (-180 <= max_lon <= 180):
+                raise ValueError("Boylam değerleri -180 ile 180 arasında olmalıdır.")
+            if min_lat > max_lat or min_lon > max_lon:
+                raise ValueError("Bbox koordinatları doğru sırada olmalıdır (min_lat, max_lat, min_lon, max_lon).")
+        return self
+
+    @model_validator(mode='after')
+    def check_vs30(self):
+        if self.min_vs30 is not None and self.max_vs30 is not None:
+            if self.min_vs30 > self.max_vs30:
+                raise ValueError("Minimum VS30 maksimum VS30'dan büyük olamaz.")
+            if self.min_vs30 < 0 or self.max_vs30 > 3000:
+                raise ValueError("VS30 değerleri 0-3000 m/s aralığında olmalıdır.")
+        return self
+
+    @model_validator(mode='after')
+    def check_mechanisms(self):
+        if self.mechanisms:
+            valid_mechanisms = set(MECHANISM_MAP.values())
+            for mechanism in self.mechanisms:
+                if mechanism not in valid_mechanisms:
+                    raise ValueError(f"Geçersiz mekanizma: {mechanism}. Geçerli mekanizmalar: {list(valid_mechanisms)}")
+        return self
+
+    @model_validator(mode='after')
+    def check_distances(self):
         distance_fields = [
             ('min_Repi', 'max_Repi'), ('min_Rhyp', 'max_Rhyp'),
             ('min_Rjb', 'max_Rjb'), ('min_Rrup', 'max_Rrup')
         ]
         
         for min_field, max_field in distance_fields:
-            min_val = getattr(criteria, min_field, None)
-            max_val = getattr(criteria, max_field, None)
+            min_val = getattr(self, min_field, None)
+            max_val = getattr(self, max_field, None)
             
             if min_val is not None and max_val is not None and min_val > max_val:
-                errors.append(f"{min_field} {max_field}'den büyük olamaz")
+                raise ValueError(f"{min_field} {max_field}'den büyük olamaz.")
             if min_val is not None and min_val < 0:
-                errors.append(f"{min_field} negatif olamaz")
+                raise ValueError(f"{min_field} negatif olamaz.")
+        return self
+
+    @model_validator(mode='after')
+    def check_depths(self):
+        if self.min_depth is not None and self.max_depth is not None:
+            if self.min_depth > self.max_depth:
+                raise ValueError("Minimum derinlik maksimum derinlikten büyük olamaz.")
+            if self.min_depth < 0 or self.max_depth > 700:
+                raise ValueError("Derinlik değerleri 0-700 km aralığında olmalıdır.")
+        return self
+
+    @model_validator(mode='after')
+    def check_pga_pgv_pgd(self):
+        if self.min_pga is not None and self.max_pga is not None:
+            if self.min_pga > self.max_pga:
+                raise ValueError("Minimum PGA maksimum PGA'dan büyük olamaz.")
+            if self.min_pga < 0 or self.max_pga > 10000:
+                raise ValueError("PGA değerleri 0-10000 cm/s² aralığında olmalıdır.")
         
-        # Bbox validasyonu
-        if criteria.bbox:
-            min_lat, max_lat, min_lon, max_lon = criteria.bbox
-            if not (-90 <= min_lat <= 90) or not (-90 <= max_lat <= 90):
-                errors.append("Enlem değerleri -90 ile 90 arasında olmalıdır")
-            if not (-180 <= min_lon <= 180) or not (-180 <= max_lon <= 180):
-                errors.append("Boylam değerleri -180 ile 180 arasında olmalıdır")
-            if min_lat > max_lat or min_lon > max_lon:
-                errors.append("Bbox koordinatları doğru sırada olmalıdır (min_lat, max_lat, min_lon, max_lon)")
+        if self.min_pgv is not None and self.max_pgv is not None:
+            if self.min_pgv > self.max_pgv:
+                raise ValueError("Minimum PGV maksimum PGV'den büyük olamaz.")
+            if self.min_pgv < 0 or self.max_pgv > 1000:
+                raise ValueError("PGV değerleri 0-1000 cm/s aralığında olmalıdır.")
         
-        # VS30 validasyonu
-        if criteria.min_vs30 is not None and criteria.max_vs30 is not None:
-            if criteria.min_vs30 > criteria.max_vs30:
-                errors.append("Minimum VS30 maksimum VS30'dan büyük olamaz")
-            if criteria.min_vs30 < 0 or criteria.max_vs30 > 3000:
-                errors.append("VS30 değerleri 0-3000 m/s aralığında olmalıdır")
-        
-        # Mekanizma validasyonu
-        if criteria.mechanisms:
-            valid_mechanisms = set(MECHANISM_MAP.values())
-            for mechanism in criteria.mechanisms:
-                if mechanism not in valid_mechanisms:
-                    errors.append(f"Geçersiz mekanizma: {mechanism}. Geçerli mekanizmalar: {list(valid_mechanisms)}")
-        
-        if errors:
-            raise ValidationError(f"Validasyon hataları:\n" + "\n".join(f"- {error}" for error in errors))
-    
-    @staticmethod
-    def validate_target_parameters(params: TargetParameters) -> None:
-        """TargetParameters nesnesini validate et"""
-        errors = []
-        
-        if params.magnitude <= 0 or params.magnitude > 10:
-            errors.append("Hedef büyüklük 0-10 aralığında olmalıdır")
-        
-        if params.distance <= 0:
-            errors.append("Hedef mesafe pozitif olmalıdır")
-        
-        if params.vs30 <= 0 or params.vs30 > 3000:
-            errors.append("Hedef VS30 0-3000 m/s aralığında olmalıdır")
-        
-        # if params.mechanism and params.mechanism not in MECHANISM_MAP.values():
-        #     errors.append(f"Geçersiz hedef mekanizma: {params.mechanism}")
-            
-        if params.mechanism:
-            for count,value in enumerate(MECHANISM_MAP.values(),start=1) :
-                if value in params.mechanism:
-                    break
-                if count == len(MECHANISM_MAP.values()):
-                    errors.append(f"Geçersiz hedef mekanizma: {params.mechanism}")
-        
-        if errors:
-            raise ValidationError(f"Hedef parametre validasyon hataları:\n" + "\n".join(f"- {error}" for error in errors))
+        if self.min_pgd is not None and self.max_pgd is not None:
+            if self.min_pgd > self.max_pgd:
+                raise ValueError("Minimum PGD maksimum PGD'den büyük olamaz.")
+            if self.min_pgd < 0 or self.max_pgd > 1000:
+                raise ValueError("PGD değerleri 0-1000 cm aralığında olmalıdır.")
+        return self
+
+    @model_validator(mode='after')
+    def check_circle_search(self):
+        if (self.circleLatitude is not None or self.circleLongitude is not None or self.circleRadius is not None):
+            if self.circleLatitude is None or self.circleLongitude is None or self.circleRadius is None:
+                raise ValueError("Dairesel arama için circleLatitude, circleLongitude ve circleRadius birlikte sağlanmalıdır.")
+            if not (-90 <= self.circleLatitude <= 90):
+                raise ValueError("circleLatitude -90 ile 90 arasında olmalıdır.")
+            if not (-180 <= self.circleLongitude <= 180):
+                raise ValueError("circleLongitude -180 ile 180 arasında olmalıdır.")
+            if self.circleRadius < 0:
+                raise ValueError("circleRadius negatif olamaz.")
+        return self
 
 class ISelectionStrategy(Protocol):
     """Seçim stratejisi interface'i"""
     
-    def select_and_score(self, df: pd.DataFrame, target_params: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def select_and_score(self, df: pd.DataFrame, criteria: SearchCriteria) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Kayıtları seç ve puanla"""
         ...
-    
-    def get_weights(self) -> Dict[str, float]:
-        """Ağırlık katsayılarını getir"""
-        ...
-    
+        
     def get_name(self) -> str:
         """Strateji adı"""
         ...
@@ -333,23 +397,115 @@ class BaseSelectionStrategy(ISelectionStrategy, ABC):
     
     def __init__(self, config: SelectionConfig):
         self.config = config
-        self.parameters = SCORE_RANGES_AND_WEIGHTS
+
+    def _gaussian_score(self, value: float, target: float, sigma: float) -> float:
+        """Çan Eğrisi (Gaussian) Puanlama Fonksiyonu. Hedef değere tam isabet = 1.0 puan. Uzaklaştıkça puan yumuşak bir şekilde düşer.
+            Gaussian Formülü: e^(-(x-u)^2 / (2*sigma^2))
+        Args:
+            value (float): _description_
+            target (float): _description_
+            sigma (float): _description_
+
+        Returns:
+            float: _description_
+        """
+        if value is None or target is None or pd.isna(value):
+            return 0.0
+        # Çan eğrisi formülü
+        diff = value - target
+        return math.exp(- (diff * diff) / (2 * sigma * sigma))
+
+    def _categorical_score(self, record_val: str, target_list: list) -> float:
+        """Metinsel eşleşme puanı (Mekanizma vb için)"""
+        if not record_val or not target_list:
+            return 0.0
+        
+        record_val_str = str(record_val)
+        # Tam eşleşme
+        if any(t == record_val_str for t in target_list):
+            return 1.0
+        # Kısmi eşleşme (Örn: "Reverse" arıyoruz, kayıt "Reverse-Oblique")
+        if any(t in record_val_str for t in target_list):
+            return 0.7
+        return 0.0
+
+    def _calculate_total_score(self, record: pd.Series, criteria: SearchCriteria) -> float:
+        """
+        DİNAMİK PUANLAMA MOTORU
+        Config'deki tüm parametreleri tarar, kullanıcı ne girdiyse ona göre puanlar.
+        """
+        total_weighted_score = 0.0
+        total_active_weight = 0.0
+        
+        # Config'deki tüm parametreler üzerinde dönüyoruz (Magnitude, Rjb, Rrup, Vs30...)
+        for key, config in SCORING_MAP.items():
+            
+            # 1. Bu parametre için bir hedef (Target) var mı?
+            # Kullanıcı target girmediyse veya min-max aralığı vermediyse bu parametreyi ELİMİNE ET.
+            if key == 'mechanism':
+                # Mekanizma özel durumu: liste boşsa geç
+                if not criteria.mechanisms:
+                    continue
+                target_val = criteria.mechanisms
+            else:
+                target_val = criteria.get_effective_target(key)
+                if target_val is None:
+                    continue
+
+            # 2. DataFrame'de bu veri var mı?
+            col_name = config['column']
+            if col_name not in record or pd.isna(record[col_name]):
+                # Kullanıcı hedef istemiş ama veri setinde (örneğin PEER'de) bu kolon yoksa puanlamaya katma
+                continue
+
+            # 3. Ağırlığı al
+            weight = criteria.weights.get_weight(key)
+            if weight <= 0:
+                continue
+
+            # 4. Puanı Hesapla
+            score = 0.0
+            if config['type'] == 'numeric':
+                sigma = criteria.get_sigma(key)
+                score = self._gaussian_score(record[col_name], target_val, sigma)
+            
+            elif config['type'] == 'categorical':
+                score = self._categorical_score(record[col_name], target_val)
+
+            # 5. Toplama Ekle
+            total_weighted_score += score * weight
+            total_active_weight += weight
+
+        # 6. Normalizasyon (0-100 arası)
+        # Eğer hiçbir kriter girilmediyse 0 döndür
+        if total_active_weight == 0:
+            return 0.0
+            
+        return (total_weighted_score / total_active_weight) * 100.0
     
-    @abstractmethod
-    def _calculate_score(self, record: pd.Series, target_params: Dict[str, Any]) -> float:
-        """Kayıt için puan hesapla"""
-        pass
-    
-    def select_and_score(self, df: pd.DataFrame, target_params: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Kayıtları seç ve puanla"""
+    def select_and_score(self, df: pd.DataFrame, criteria: SearchCriteria) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """ Kayıtları puanla ve seç. 
+
+        Args:
+            df (pd.DataFrame): Puanlanacak veri seti
+            criteria (SearchCriteria): Kullanıcının girdiği arama kriterleri ve ağırlıklar
+
+        Returns:
+            Tuple[pd.DataFrame, pd.DataFrame]: Seçilen kayıtlar ve tüm kayıtların puanlı hali
+        """
         if df.empty:
             return pd.DataFrame(), pd.DataFrame()
         
-        df_scored = df.copy()
-        df_scored['SCORE'] = df_scored.apply(lambda row: self._calculate_score(row, target_params),axis=1)
+        scored_df = df.copy()
         
-        selected_df = self._apply_selection_rules(df_scored)
-        return selected_df, df_scored
+        # Vektörize işlem yerine apply kullanıyoruz (karmaşık mantık için daha güvenli)
+        # Performans gerekirse numpy ile vektörize edilebilir.
+        scored_df['SCORE'] = scored_df.apply(
+            lambda row: self._calculate_total_score(row, criteria), axis=1
+        )
+        
+        selected_df = self._apply_selection_rules(scored_df)
+        return selected_df, scored_df
     
     def _apply_selection_rules(self, df_scored: pd.DataFrame) -> pd.DataFrame:
         """Seçim kurallarını uygula"""
@@ -378,109 +534,13 @@ class BaseSelectionStrategy(ISelectionStrategy, ABC):
             event_counts[event] = event_counts.get(event, 0) + 1
         
         return pd.DataFrame(selected_records)
-    
-    def get_weights(self) -> Dict[str, float]:
-        return self.parameters['weights']
-    
+        
     def get_name(self) -> str:
         return str(self.config.design_code.value)
-
-    def _mechanism_score(self, record_mechanism: str, target_mechanism: str) -> float:
-        """
-        Mekanizma puanlaması:
-        - Tam eşleşme: 1.0
-        - Karma mekanizma ve hedef mekanizma içinde geçiyorsa: 0.7
-        - Hiçbiri değilse: 0.0
-        """
-        if not record_mechanism or not target_mechanism:
-            return 0.0
-        if record_mechanism == target_mechanism:
-            return 1.0
-        if "-" in record_mechanism and target_mechanism in record_mechanism.split("-"):
-            return 0.7
-        return 0.0
-
-    def _calculate_range_score(self, ratio: float, ranges: Dict[str, Tuple[float, float]]) -> float:
-        """Aralıklara göre puan hesapla"""
-        if ranges['very_good'][0] <= ratio <= ranges['very_good'][1]:
-            return 1.0
-        elif ranges['good'][0] <= ratio <= ranges['good'][1]:
-            return 0.8
-        elif ranges['acceptable'][0] <= ratio <= ranges['acceptable'][1]:
-            return 0.6
-        return 0.0
-    
 class TBDYSelectionStrategy(BaseSelectionStrategy):
     """TBDY 2018 seçim stratejisi"""
-    # def __init__(self):
-    #     config = SelectionConfig(design_code=DesignCode.TBDY_2018,
-    #                       num_records=22,
-    #                       max_per_station=3,
-    #                       max_per_event=3,
-    #                       min_score=55)
-    #     super().__init__(config)
-    def _calculate_score(self, record: pd.Series, target_params: Dict[str, Any]) -> float:
-        """TBDY'ye göre puan hesapla"""
-        score = 0.0
-        total_weight = 0
-        weights = self.get_weights() #ağırlıklandırma puanı çarpanlarını getirir.
-
-        # Mechanism puanı
-        if 'mechanism' in target_params and 'MECHANISM' in record:
-            mech_score = 0
-            for mech in target_params['mechanism']:
-                dummy_score = self._mechanism_score(record['MECHANISM'], mech)
-                mech_score = dummy_score if dummy_score > mech_score else mech_score
-                
-            score += mech_score * weights['mechanism_match']
-            total_weight += weights['mechanism_match']
-        
-        # Magnitude puanı
-        if 'magnitude' in target_params and 'MAGNITUDE' in record:
-            mag_ratio = record['MAGNITUDE'] / target_params['magnitude']
-            mag_score = self._calculate_range_score(mag_ratio, self.parameters['ranges']['magnitude'])
-            score += mag_score * weights['magnitude_match']
-            total_weight += weights['magnitude_match']
-        
-        # Mesafe puanı
-        if 'distance' in target_params and 'RJB' in record:
-            dist_ratio = record['RJB'] / target_params['distance']
-            dist_score = self._calculate_range_score(dist_ratio, self.parameters['ranges']['distance'])
-            score += dist_score * weights['distance_match']
-            total_weight += weights['distance_match']
-        
-        # VS30 puanı
-        if 'vs30' in target_params and 'VS30' in record:
-            if target_params['vs30'] != None and record['VS30'] != None:
-                vs30_ratio = record['VS30'] / target_params['vs30']
-                vs30_score = self._calculate_range_score(vs30_ratio, self.parameters['ranges']['vs30'])
-                score += vs30_score * weights['vs30_match']
-                total_weight += weights['vs30_match']
-            
-        # kayıt puanı PGA(cm2/sec),PGV(cm/sec),T90_avg(sec)
-        if 'pga' in target_params and 'PGA(cm2/sec)' in record:
-            if target_params['pga'] != None and record['PGA(cm2/sec)'] != None:
-                pga_ratio = record['PGA(cm2/sec)'] / target_params['pga']
-                pga_score = self._calculate_range_score(pga_ratio, self.parameters['ranges']['pga'])
-                score += pga_score * weights['pga_match']
-                total_weight += weights['pga_match']
-            
-        if 'pgv' in target_params and 'PGV(cm/sec)' in record:
-            if target_params['pgv'] != None and record['PGV(cm/sec)'] != None:
-                pgv_ratio = record['PGV(cm/sec)'] / target_params['pgv']
-                pgv_score = self._calculate_range_score(pgv_ratio, self.parameters['ranges']['pgv'])
-                score += pgv_score * weights['pgv_match']
-                total_weight += weights['pgv_match']
-            
-        if 't90' in target_params and 'T90_avg(sec)' in record:
-            if target_params['t90'] != None and record['T90_avg(sec)'] != None:
-                t90_ratio = record['T90_avg(sec)'] / target_params['t90']
-                t90_score = self._calculate_range_score(t90_ratio, self.parameters['ranges']['t90'])
-                score += t90_score * weights['t90_match']
-                total_weight += weights['t90_match']
-        
-        return (score / total_weight) * 100 if total_weight > 0 else 0
-
+    def get_name(self) -> str:
+        return "TBDY_2018_Gaussian"
 class EurocodeSelectionStrategy(BaseSelectionStrategy):
     """Eurocode 8 seçim stratejisi"""
     

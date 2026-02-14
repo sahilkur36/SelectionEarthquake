@@ -2,6 +2,7 @@ from abc import ABC
 from math import atan2, cos, radians, sin, sqrt
 from typing import Dict, Protocol, Type
 import pandas as pd
+from functools import lru_cache
 
 from ..utility.path_utils import load_excel
 from ..enums.Enums import ProviderName
@@ -189,6 +190,7 @@ class AFADColumnMapper(BaseColumnMapper):
         return R * c
 
     # AFADDataProvider'da istasyon eşleme iyileştirmesi
+    @lru_cache(maxsize=1)
     def _build_station_info_df(self, max_distance_km: float = 30.0) -> pd.DataFrame:
         """Daha hızlı istasyon bilgisi yükleme"""
         try:

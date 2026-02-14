@@ -2,6 +2,7 @@ from typing import Any, Dict, Protocol
 import pandas as pd
 from selection_service.core.ErrorHandle import ProviderError
 from selection_service.processing.ResultHandle import Result
+from selection_service.processing.Selection import SearchCriteria
 
 
 class IDataProvider(Protocol):

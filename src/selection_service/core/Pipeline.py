@@ -10,7 +10,7 @@ from ..enums.Enums import ProviderName
 from ..providers.IProvider import IDataProvider
 from ..processing.Selection import (ISelectionStrategy,
                                     SearchCriteria,
-                                    TargetParameters)
+                                    )
 from ..core.ErrorHandle import (NoDataError,
                                 PipelineError,
                                 ProviderError,
@@ -32,13 +32,11 @@ class PipelineResult:
     failed_providers: List[str] = field(default_factory=list)
     logs: List[str] = field(default_factory=list)
 
-
 @dataclass
 class PipelineContext:
     providers       : List[IDataProvider]
     strategy        : ISelectionStrategy
     search_criteria : SearchCriteria
-    target_params   : TargetParameters
     data            : Optional[List[pd.DataFrame]] = None
     combined_df     : Optional[pd.DataFrame] = None
     selected_df     : Optional[pd.DataFrame] = None
@@ -47,7 +45,6 @@ class PipelineContext:
     logs            : List[str]              = field(default_factory=list)
     start_time      : float                  = field(default_factory=time.time)
 
-
 class EarthquakePipeline:
     """Main pipeline engine (stateless) with Result Pattern"""
 
@@ -55,16 +52,14 @@ class EarthquakePipeline:
     async def execute_async(self,
                             providers: List[IDataProvider],
                             strategy: ISelectionStrategy,
-                            search_criteria: SearchCriteria,
-                            target_params: TargetParameters) -> Result[PipelineResult, PipelineError]:
+                            search_criteria: SearchCriteria) -> Result[PipelineResult, PipelineError]:
         """Asenkron pipeline çalıştır"""
        
         # logger.info(f"Pipeline (async) running: strategy={strategy.get_name()}, providers={len(providers)}")
         context = PipelineContext(
             providers=providers,
             strategy=strategy,
-            search_criteria=search_criteria,
-            target_params=target_params
+            search_criteria=search_criteria
         )
         return await self._execute_pipeline_async(context)
 
@@ -101,11 +96,10 @@ class EarthquakePipeline:
         return composed
 
     @async_result_decorator
-    async def _validate_inputs_async(self,
-                                     context: PipelineContext) -> PipelineContext:
-        """Validate inputs"""
-        context.search_criteria.validate()
-        context.target_params.validate()
+    async def _validate_inputs_async(self, context: PipelineContext) -> PipelineContext:
+        # Pydantic zaten initialization sırasında validate ediyor ama ekstra logic varsa buraya
+        if context.search_criteria.min_magnitude is None and context.search_criteria.target_magnitude is None:
+             context.logs.append("Warning: Neither min_magnitude nor target_magnitude specified.")
         return context
 
     @async_result_decorator
@@ -144,8 +138,7 @@ class EarthquakePipeline:
     # SENKRON metodlar
     def execute_sync(self, providers: List[IDataProvider],
                      strategy: ISelectionStrategy,
-                     search_criteria: SearchCriteria,
-                     target_params: TargetParameters) -> Result[PipelineResult, PipelineError]:
+                     search_criteria: SearchCriteria) -> Result[PipelineResult, PipelineError]:
         """Senkron pipeline çalıştır"""
     
         # logger.info(f"Pipeline (sync) running: strategy={strategy.get_name()}, providers={len(providers)}")
@@ -153,8 +146,7 @@ class EarthquakePipeline:
         context = PipelineContext(
             providers=providers,
             strategy=strategy,
-            search_criteria=search_criteria,
-            target_params=target_params
+            search_criteria=search_criteria
         )
         return self._execute_pipeline_sync(context=context)
 
@@ -187,8 +179,9 @@ class EarthquakePipeline:
     @result_decorator
     def _validate_inputs_sync(self, context: PipelineContext) -> PipelineContext:
         """Validate inputs (sync)"""
-        context.search_criteria.validate()
-        context.target_params.validate()
+        # Pydantic zaten initialization sırasında validate ediyor ama ekstra logic varsa buraya
+        if context.search_criteria.min_magnitude is None and context.search_criteria.target_magnitude is None:
+             context.logs.append("Warning: Neither min_magnitude nor target_magnitude specified.")
         return context
 
     @result_decorator
@@ -256,9 +249,7 @@ class EarthquakePipeline:
             raise NoDataError("No data to apply strategy on")
         
         try:
-            selected_df, scored_df = context.strategy.select_and_score(
-                context.combined_df, context.target_params.__dict__
-            )
+            selected_df, scored_df = context.strategy.select_and_score(df= context.combined_df, criteria= context.search_criteria)
             context.selected_df = selected_df
             context.scored_df = scored_df
             context.logs.append(f"Strategy applied: {context.strategy.get_name()}")
@@ -278,7 +269,7 @@ class EarthquakePipeline:
         
         report = self._generate_report(
             context.selected_df, context.scored_df,
-            context.search_criteria, context.target_params,
+            context.search_criteria,
             context.strategy, context.providers
         )
         
@@ -292,7 +283,7 @@ class EarthquakePipeline:
         )
 
     def _generate_report(self, selected_df: pd.DataFrame, scored_df: pd.DataFrame,
-                         search_criteria: SearchCriteria, target_params: TargetParameters,
+                         search_criteria: SearchCriteria,
                          strategy: ISelectionStrategy, providers: List[IDataProvider]) -> Dict[str, Any]:
         """Generate report dictionary"""
         if selected_df.empty:
@@ -300,7 +291,6 @@ class EarthquakePipeline:
 
         return {
             "status": "success",
-            "target_params": target_params,
             "search_criteria": search_criteria,
             "selected_count": len(selected_df),
             "total_considered": len(scored_df),
@@ -314,32 +304,31 @@ class EarthquakePipeline:
             }
         }
 
-
 class EarthquakeAPI:
     """Earthquake API with Result Pattern"""
 
     def __init__(self, 
                  providerNames: List[ProviderName],
-                 strategies: List[ISelectionStrategy]):
+                 strategies: List[ISelectionStrategy],
+                 use_cache: bool = True,**kwargs: Any):
+        
         self.providerFactory = ProviderFactory()
-        self.providers = [self.providerFactory.create_provider(provider_type=name) for name in providerNames]
+        self.providers = [self.providerFactory.create_provider(provider_type=name, use_cache=use_cache, **kwargs) for name in providerNames]
         self.strategies = {s.get_name(): s for s in strategies}
         self.pipeline = EarthquakePipeline()
 
     def run_sync(self,
                  criteria: SearchCriteria,
-                 target: TargetParameters,
                  strategy_name: str) -> Result[PipelineResult, PipelineError]:
         """Senkron çalıştırma with Result pattern"""
         strategy_result = self._get_strategy(strategy_name)
         if not strategy_result.success:
             return strategy_result
         
-        return self.pipeline.execute_sync(self.providers, strategy_result.value, criteria, target)
+        return self.pipeline.execute_sync(self.providers, strategy_result.value, criteria)
 
     async def run_async(self,
                         criteria: SearchCriteria,
-                        target: TargetParameters,
                         strategy_name: str) -> Result[PipelineResult, PipelineError]:
         """
         Asynchronously executes the pipeline using the specified strategy, search criteria, and target parameters.
@@ -361,8 +350,7 @@ class EarthquakeAPI:
 
         return await self.pipeline.execute_async(self.providers,
                                                  strategy_result.value,
-                                                 criteria,
-                                                 target)
+                                                 criteria)
 
     def _get_strategy(self,
                       name: str) -> Result[ISelectionStrategy, ValueError]:

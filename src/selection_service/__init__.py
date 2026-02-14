@@ -5,16 +5,13 @@ selection_service
 A Python library for earthquake ground motion selection and processing.
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.1"
 
 # --- Core API ---
 from .core.LoggingConfig import setup_logging
 
 # --- Enums ---
 from .enums.Enums import ProviderName, DesignCode
-
-# --- Config ---
-from .core.Config import SCORE_RANGES_AND_WEIGHTS
 
 from .core.Pipeline import EarthquakePipeline, EarthquakeAPI
 
@@ -26,7 +23,6 @@ from .providers.ProvidersFactory import ProviderFactory
 from .processing.Selection import (
     SelectionConfig,
     SearchCriteria,
-    TargetParameters,
     BaseSelectionStrategy,
     TBDYSelectionStrategy,
     EurocodeSelectionStrategy
@@ -37,11 +33,9 @@ __all__ = [
     "__version__",
     "EarthquakePipeline", "EarthquakeAPI",
     "setup_logging",
-    "SCORE_RANGES_AND_WEIGHTS",
     "ProviderName", "DesignCode",
     "ProviderFactory", "IDataProvider"
-    "SelectionConfig", "SearchCriteria",
-    "TargetParameters", "BaseSelectionStrategy",
+    "SelectionConfig", "SearchCriteria", "BaseSelectionStrategy",
     "TBDYSelectionStrategy", "EurocodeSelectionStrategy",
     "ColumnMapperFactory"
 ]
